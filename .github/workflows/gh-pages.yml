@@ -11,8 +11,6 @@ on:
         description: "Update channel"
         required: true
         default: "stable"
-  push:
-    branches: [ main ]
 
 permissions:
   contents: read
@@ -20,183 +18,110 @@ permissions:
   id-token: write
 
 jobs:
-  build-and-publish:
+  build:
     runs-on: ubuntu-latest
     env:
-      APP: bootrap-sample
-      VERSION: ${{ inputs.version || '1.0.0' }}
-      CHANNEL: ${{ inputs.channel || 'stable' }}
-
+      APP: your-desktop-app
+      VERSION: ${{ inputs.version }}
+      CHANNEL: ${{ inputs.channel }}
     steps:
-      - name: Checkout
       - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24.x'
 
-      - name: Prepare workspace
+      - name: Prepare
         run: |
           set -euxo pipefail
           mkdir -p dist pack
           date -u +"%Y-%m-%dT%H:%M:%SZ" > .created_at
 
       - name: Write Ed25519 private key
-        shell: bash
         env:
           ED25519_PRIVATE_PEM: ${{ secrets.ED25519_PRIVATE_PEM }}
         run: |
           set -euo pipefail
-          if [[ -z "${ED25519_PRIVATE_PEM:-}" ]]; then
-            echo "ED25519_PRIVATE_PEM secret is required." >&2
-            exit 1
-          fi
+          test -n "${ED25519_PRIVATE_PEM:-}" || { echo "Missing ED25519_PRIVATE_PEM secret" >&2; exit 1; }
           umask 077
           printf "%s" "$ED25519_PRIVATE_PEM" > private.pem
           openssl pkey -in private.pem -pubout -out public.pem
           echo "Public key (paste into Bootrap config.yaml):"
           cat public.pem
 
-      - name: Build cross-platform binaries
+      - name: Build (linux/windows/macos)
         run: |
           set -euxo pipefail
-          targets=(
-            "linux/amd64"
-            "linux/arm64"
-            "windows/amd64"
-            "windows/arm64"
-            "darwin/amd64"
-            "darwin/arm64"
-          )
-          for t in "${targets[@]}"; do
-            IFS=/ read -r GOOS GOARCH <<<"$t"
-            BIN="$APP"
-            [[ "$GOOS" == "windows" ]] && BIN="${APP}.exe"
-            OUT="pack/${GOOS}-${GOARCH}"
-            mkdir -p "$OUT/bin"
-            GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
-              go build -trimpath -ldflags "-s -w" -o "$OUT/bin/$BIN" ./...
+          for t in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
+            GOOS=${t%/*}; GOARCH=${t#*/};
+            BIN="$APP"; [ "$GOOS" = windows ] && BIN="${APP}.exe"
+            OUT="pack/${GOOS}-${GOARCH}/bin"
+            mkdir -p "$OUT"
+            GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$OUT/$BIN" ./...
           done
 
-      - name: Package artifacts
+      - name: Package
         run: |
           set -euxo pipefail
-          shopt -s nullglob
           for d in pack/*; do
-            flavor=$(basename "$d") # e.g. linux-amd64
+            flavor=$(basename "$d")
             case "$flavor" in
-              linux-*)
-                tar -C "$d" -czf "dist/${APP}_${VERSION}_${flavor}.tar.gz" .
-                ;;
-              *)
-                (cd "$d" && zip -rq "../../dist/${APP}_${VERSION}_${flavor}.zip" .)
-                ;;
+              linux-*)  tar -C "$d" -czf "dist/${APP}_${VERSION}_${flavor}.tar.gz" . ;;
+              *)        (cd "$d" && zip -rq "../../dist/${APP}_${VERSION}_${flavor}.zip" .) ;;
             esac
           done
-          ls -l dist
 
-      - name: Hash & Sign artifacts
+      - name: Hash & Sign
         run: |
           set -euxo pipefail
           shopt -s nullglob
           for f in dist/*.{zip,tar.gz}; do
-            # sha256
+            [ -f "$f" ] || continue
             sha256sum "$f" | awk '{print $1}' > "$f.sha256"
-            # ed25519 detached signature -> base64
             openssl pkeyutl -sign -rawin -inkey private.pem -in "$f" -out sig.bin
             base64 -w0 < sig.bin > "$f.sig.b64"
             rm -f sig.bin
           done
 
       - name: Generate manifest.json
+        env:
+          BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/dist
         run: |
           set -euo pipefail
           CRE=$(cat .created_at)
-          OWNER="${GITHUB_REPOSITORY_OWNER}"
-          REPO="${GITHUB_REPOSITORY#*/}"
-          BASE="https://${OWNER}.github.io/${REPO}/dist"
-
-          cat > genmanifest.go <<'EOF'
+          cat > gen.go <<'EOF'
           package main
-          import (
-            "encoding/json"
-            "os"
-            "path/filepath"
-            "strings"
-            "time"
-          )
-          type Artifact struct {
-            OS, Arch, URL, SHA256, Signature, Format string
-          }
-          type Version struct {
-            Version   string     `json:"version"`
-            Channel   string     `json:"channel"`
-            CreatedAt time.Time  `json:"created_at"`
-            Artifacts []Artifact `json:"artifacts"`
-          }
-          type Manifest struct {
-            ManifestVersion int       `json:"manifest_version"`
-            Versions        []Version `json:"versions"`
-          }
-          func main() {
-            version := os.Getenv("VERSION")
-            channel := os.Getenv("CHANNEL")
-            base := os.Getenv("BASE")
-            created := os.Getenv("CREATED_AT")
-            files, _ := filepath.Glob("dist/*")
-            arts := []Artifact{}
-            for _, f := range files {
-              b := filepath.Base(f)
-              if !(strings.HasSuffix(b, ".zip") || strings.HasSuffix(b, ".tar.gz")) { continue }
-              parts := strings.SplitN(b, "_", 3)
-              if len(parts) < 3 { continue }
-              osarch := strings.TrimSuffix(strings.TrimSuffix(parts[2], ".zip"), ".tar.gz")
-              oa := strings.SplitN(osarch, "-", 2)
-              if len(oa) != 2 { continue }
-              format := "zip"; if strings.HasSuffix(b, ".tar.gz") { format = "tar.gz" }
-              sha, _ := os.ReadFile("dist/"+b+".sha256")
-              sig, _ := os.ReadFile("dist/"+b+".sig.b64")
-              arts = append(arts, Artifact{
-                OS: oa[0], Arch: oa[1],
-                URL: strings.TrimRight(base, "/") + "/" + b,
-                SHA256: strings.TrimSpace(string(sha)),
-                Signature: strings.TrimSpace(string(sig)),
-                Format: format,
-              })
-            }
-            t, _ := time.Parse(time.RFC3339, created)
-            m := Manifest{
-              ManifestVersion: 1,
-              Versions: []Version{{
-                Version: version, Channel: channel, CreatedAt: t, Artifacts: arts,
-              }},
-            }
-            enc := json.NewEncoder(os.Stdout); enc.SetIndent("", "  "); _ = enc.Encode(m)
-          }
+          import ("encoding/json";"os";"path/filepath";"strings";"time")
+          type A struct{OS,Arch,URL,SHA256,Signature,Format string}
+          type V struct{Version,Channel string; CreatedAt time.Time; Artifacts []A}
+          type M struct{ManifestVersion int; Versions []V}
+          func main(){v:=os.Getenv("VERSION");c:=os.Getenv("CHANNEL");b:=os.Getenv("BASE");cre:=os.Getenv("CRE")
+           fs,_:=filepath.Glob("dist/*");var as []A
+           for _,f:=range fs{bn:=filepath.Base(f);if !(strings.HasSuffix(bn,".zip")||strings.HasSuffix(bn,".tar.gz")){continue}
+            parts:=strings.SplitN(bn,"_",3);if len(parts)<3{continue}
+            oa:=strings.TrimSuffix(strings.TrimSuffix(parts[2],".zip"),".tar.gz")
+            p:=strings.SplitN(oa,"-",2);if len(p)!=2{continue}
+            fmt:="zip";if strings.HasSuffix(bn,".tar.gz"){fmt="tar.gz"}
+            sha,_:=os.ReadFile("dist/"+bn+".sha256");sig,_:=os.ReadFile("dist/"+bn+".sig.b64")
+            as=append(as,A{OS:p[0],Arch:p[1],URL:strings.TrimRight(b,"/")+"/"+bn,SHA256:strings.TrimSpace(string(sha)),Signature:strings.TrimSpace(string(sig)),Format:fmt})}
+           t,_:=time.Parse(time.RFC3339,cre)
+           m:=M{ManifestVersion:1,Versions:[]V{{Version:v,Channel:c,CreatedAt:t,Artifacts:as}}}
+           e:=json.NewEncoder(os.Stdout);e.SetIndent("","  ");_ = e.Encode(m)}
           EOF
-
-          BASE="$BASE" VERSION="$VERSION" CHANNEL="$CHANNEL" CREATED_AT="$CRE" \
-            go run ./genmanifest.go > manifest.json
-
+          CRE="$CRE" go run ./gen.go > manifest.json
           echo "Manifest generated:"
           cat manifest.json
 
       - name: Prepare Pages artifact
         run: |
           set -euxo pipefail
-          mkdir -p site
+          mkdir -p site/dist
           cp -v manifest.json site/
           cp -v public.pem site/
-          mkdir -p site/dist
           cp -v dist/* site/dist/
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
+      - uses: actions/deploy-pages@v4
