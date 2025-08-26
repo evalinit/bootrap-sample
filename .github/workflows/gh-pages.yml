@@ -21,7 +21,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      APP: your-desktop-app
+      APP: bootrap-sample
       VERSION: ${{ inputs.version }}
       CHANNEL: ${{ inputs.channel }}
     steps:
@@ -66,8 +66,8 @@ jobs:
           for d in pack/*; do
             flavor=$(basename "$d")
             case "$flavor" in
-              linux-*)  tar -C "$d" -czf "dist/${APP}_${VERSION}_${flavor}.tar.gz" . ;;
-              *)        (cd "$d" && zip -rq "../../dist/${APP}_${VERSION}_${flavor}.zip" .) ;;
+              linux-*)  tar -C "$d" -czf "dist/${VERSION}_${flavor}.tar.gz" . ;;
+              *)        (cd "$d" && zip -rq "../../dist/${VERSION}_${flavor}.zip" .) ;;
             esac
           done
 
