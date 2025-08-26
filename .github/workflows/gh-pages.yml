@@ -66,8 +66,14 @@ jobs:
           for d in pack/*; do
             flavor=$(basename "$d") # e.g. linux-amd64
             case "$flavor" in
-              linux-*)  tar -C "$d" -czf "dist/${VERSION}_${flavor}.tar.gz" . ;;
-              *)        (cd "$d" && zip -rq "../../dist/${VERSION}_${flavor}.zip" .) ;;
+              linux-*)
+                # before: tar -C "$d" -czf "dist/${VERSION}_${flavor}.tar.gz" .
+                tar -C "$d" -czf "dist/${VERSION}_${flavor}.tar.gz" bin
+                ;;
+              *)
+                # before: (cd "$d" && zip -rq "../../dist/${VERSION}_${flavor}.zip" .)
+                (cd "$d" && zip -rq "../../dist/${VERSION}_${flavor}.zip" bin)
+                ;;
             esac
           done
           ls -l dist
