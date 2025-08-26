@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version string (e.g. 1.0.0)"
+        description: "Version (e.g. 1.0.0)"
         required: true
         default: "1.0.0"
       channel:
@@ -21,7 +21,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      APP: bootrap-sample
+      APP_BIN: bootrap-sample
       VERSION: ${{ inputs.version }}
       CHANNEL: ${{ inputs.channel }}
     steps:
@@ -54,22 +54,23 @@ jobs:
           set -euxo pipefail
           for t in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
             GOOS=${t%/*}; GOARCH=${t#*/};
-            BIN="$APP"; [ "$GOOS" = windows ] && BIN="${APP}.exe"
+            BIN="$APP_BIN"; [ "$GOOS" = windows ] && BIN="${APP_BIN}.exe"
             OUT="pack/${GOOS}-${GOARCH}/bin"
             mkdir -p "$OUT"
             GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$OUT/$BIN" ./...
           done
 
-      - name: Package
+      - name: Package (dist/<version>_<os-arch>.*)
         run: |
           set -euxo pipefail
           for d in pack/*; do
-            flavor=$(basename "$d")
+            flavor=$(basename "$d") # e.g. linux-amd64
             case "$flavor" in
               linux-*)  tar -C "$d" -czf "dist/${VERSION}_${flavor}.tar.gz" . ;;
               *)        (cd "$d" && zip -rq "../../dist/${VERSION}_${flavor}.zip" .) ;;
             esac
           done
+          ls -l dist
 
       - name: Hash & Sign
         run: |
@@ -86,6 +87,8 @@ jobs:
       - name: Generate manifest.json
         env:
           BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/dist
+          VERSION: ${{ env.VERSION }}
+          CHANNEL: ${{ env.CHANNEL }}
         run: |
           set -euo pipefail
           CRE=$(cat .created_at)
@@ -95,18 +98,23 @@ jobs:
           type A struct{OS,Arch,URL,SHA256,Signature,Format string}
           type V struct{Version,Channel string; CreatedAt time.Time; Artifacts []A}
           type M struct{ManifestVersion int; Versions []V}
-          func main(){v:=os.Getenv("VERSION");c:=os.Getenv("CHANNEL");b:=os.Getenv("BASE");cre:=os.Getenv("CRE")
-           fs,_:=filepath.Glob("dist/*");var as []A
-           for _,f:=range fs{bn:=filepath.Base(f);if !(strings.HasSuffix(bn,".zip")||strings.HasSuffix(bn,".tar.gz")){continue}
-            parts:=strings.SplitN(bn,"_",3);if len(parts)<3{continue}
-            oa:=strings.TrimSuffix(strings.TrimSuffix(parts[2],".zip"),".tar.gz")
-            p:=strings.SplitN(oa,"-",2);if len(p)!=2{continue}
-            fmt:="zip";if strings.HasSuffix(bn,".tar.gz"){fmt="tar.gz"}
-            sha,_:=os.ReadFile("dist/"+bn+".sha256");sig,_:=os.ReadFile("dist/"+bn+".sig.b64")
-            as=append(as,A{OS:p[0],Arch:p[1],URL:strings.TrimRight(b,"/")+"/"+bn,SHA256:strings.TrimSpace(string(sha)),Signature:strings.TrimSpace(string(sig)),Format:fmt})}
-           t,_:=time.Parse(time.RFC3339,cre)
-           m:=M{ManifestVersion:1,Versions:[]V{{Version:v,Channel:c,CreatedAt:t,Artifacts:as}}}
-           e:=json.NewEncoder(os.Stdout);e.SetIndent("","  ");_ = e.Encode(m)}
+          func main(){
+            v:=os.Getenv("VERSION"); c:=os.Getenv("CHANNEL"); b:=os.Getenv("BASE"); cre:=os.Getenv("CRE")
+            files,_:=filepath.Glob("dist/*"); var arts []A
+            for _,f:=range files{
+              bn:=filepath.Base(f)
+              if !(strings.HasSuffix(bn,".zip")||strings.HasSuffix(bn,".tar.gz")){continue}
+              parts:=strings.SplitN(bn,"_",2); if len(parts)!=2 {continue}
+              osarch:=strings.TrimSuffix(strings.TrimSuffix(parts[1],".zip"),".tar.gz")
+              p:=strings.SplitN(osarch,"-",2); if len(p)!=2 {continue}
+              fmt:="zip"; if strings.HasSuffix(bn,".tar.gz"){fmt="tar.gz"}
+              sha,_:=os.ReadFile("dist/"+bn+".sha256"); sig,_:=os.ReadFile("dist/"+bn+".sig.b64")
+              arts=append(arts,A{OS:p[0],Arch:p[1],URL:strings.TrimRight(b,"/")+"/"+bn,SHA256:strings.TrimSpace(string(sha)),Signature:strings.TrimSpace(string(sig)),Format:fmt})
+            }
+            t,_:=time.Parse(time.RFC3339,cre)
+            m:=M{ManifestVersion:1,Versions:[]V{{Version:v,Channel:c,CreatedAt:t,Artifacts:arts}}}
+            e:=json.NewEncoder(os.Stdout); e.SetIndent("","  "); _ = e.Encode(m)
+          }
           EOF
           CRE="$CRE" go run ./gen.go > manifest.json
           echo "Manifest generated:"
