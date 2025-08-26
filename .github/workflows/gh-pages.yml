@@ -95,29 +95,46 @@ jobs:
           cat > gen.go <<'EOF'
           package main
           import ("encoding/json";"os";"path/filepath";"strings";"time")
-          type A struct{OS,Arch,URL,SHA256,Signature,Format string}
-          type V struct{Version,Channel string; CreatedAt time.Time; Artifacts []A}
-          type M struct{ManifestVersion int; Versions []V}
-          func main(){
-            v:=os.Getenv("VERSION"); c:=os.Getenv("CHANNEL"); b:=os.Getenv("BASE"); cre:=os.Getenv("CRE")
-            files,_:=filepath.Glob("dist/*"); var arts []A
-            for _,f:=range files{
-              bn:=filepath.Base(f)
-              if !(strings.HasSuffix(bn,".zip")||strings.HasSuffix(bn,".tar.gz")){continue}
-              parts:=strings.SplitN(bn,"_",2); if len(parts)!=2 {continue}
-              osarch:=strings.TrimSuffix(strings.TrimSuffix(parts[1],".zip"),".tar.gz")
-              p:=strings.SplitN(osarch,"-",2); if len(p)!=2 {continue}
-              fmt:="zip"; if strings.HasSuffix(bn,".tar.gz"){fmt="tar.gz"}
-              sha,_:=os.ReadFile("dist/"+bn+".sha256"); sig,_:=os.ReadFile("dist/"+bn+".sig.b64")
-              arts=append(arts,A{OS:p[0],Arch:p[1],URL:strings.TrimRight(b,"/")+"/"+bn,SHA256:strings.TrimSpace(string(sha)),Signature:strings.TrimSpace(string(sig)),Format:fmt})
+          type Artifact struct {
+            OS, Arch, URL, SHA256, Signature, Format string
+          }
+          type Version struct {
+            Version   string     `json:"version"`
+            Channel   string     `json:"channel"`
+            CreatedAt time.Time  `json:"created_at"`
+            Artifacts []Artifact `json:"artifacts"`
+          }
+          type Manifest struct {
+            ManifestVersion int       `json:"manifest_version"`
+            Versions        []Version `json:"versions"`
+          }
+          func main() {
+            v := os.Getenv("VERSION"); c := os.Getenv("CHANNEL"); b := os.Getenv("BASE"); cre := os.Getenv("CRE")
+            files, _ := filepath.Glob("dist/*")
+            arts := []Artifact{}
+            for _, f := range files {
+              bn := filepath.Base(f)
+              if !(strings.HasSuffix(bn,".zip")||strings.HasSuffix(bn,".tar.gz")) { continue }
+              parts := strings.SplitN(bn, "_", 2); if len(parts)!=2 { continue }
+              osarch := strings.TrimSuffix(strings.TrimSuffix(parts[1], ".zip"), ".tar.gz")
+              p := strings.SplitN(osarch, "-", 2); if len(p)!=2 { continue }
+              fmt := "zip"; if strings.HasSuffix(bn, ".tar.gz") { fmt = "tar.gz" }
+              sha, _ := os.ReadFile("dist/"+bn+".sha256")
+              sig, _ := os.ReadFile("dist/"+bn+".sig.b64")
+              arts = append(arts, Artifact{
+                OS: p[0], Arch: p[1],
+                URL: strings.TrimRight(b, "/") + "/" + bn,
+                SHA256: strings.TrimSpace(string(sha)),
+                Signature: strings.TrimSpace(string(sig)),
+                Format: fmt,
+              })
             }
-            t,_:=time.Parse(time.RFC3339,cre)
-            m:=M{ManifestVersion:1,Versions:[]V{{Version:v,Channel:c,CreatedAt:t,Artifacts:arts}}}
-            e:=json.NewEncoder(os.Stdout); e.SetIndent("","  "); _ = e.Encode(m)
+            t, _ := time.Parse(time.RFC3339, cre)
+            m := Manifest{ManifestVersion: 1, Versions: []Version{{Version: v, Channel: c, CreatedAt: t, Artifacts: arts}}}
+            e := json.NewEncoder(os.Stdout); e.SetIndent("", "  "); _ = e.Encode(m)
           }
           EOF
           CRE="$CRE" go run ./gen.go > manifest.json
-          echo "Manifest generated:"
           cat manifest.json
 
       - name: Prepare Pages artifact
