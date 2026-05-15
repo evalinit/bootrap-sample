@@ -58,30 +58,57 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 var (
-	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	urlStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
-	argsStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	badgeStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("86")).
+			Padding(0, 1)
+	versionStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("86"))
+	addrStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
+	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	urlStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	argsStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("118"))
+	tsStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+	countStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("86")).
+			Bold(true)
 )
 
 func (m model) View() string {
 	var b strings.Builder
 
-	b.WriteString(headerStyle.Render(fmt.Sprintf("Sample  v%s", version)))
-	b.WriteString(dimStyle.Render(fmt.Sprintf("   %s\n\n", m.addr)))
+	// Header
+	n := len(m.links)
+	noun := "links"
+	if n == 1 {
+		noun = "link"
+	}
+	b.WriteString(badgeStyle.Render(" Sample "))
+	b.WriteString("  ")
+	b.WriteString(versionStyle.Render("v" + version))
+	b.WriteString("  ")
+	b.WriteString(addrStyle.Render(m.addr))
+	b.WriteString("  ")
+	b.WriteString(countStyle.Render(fmt.Sprintf("%d %s", n, noun)))
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("  ────────────────────────────────────────\n\n"))
 
-	if len(m.links) == 0 {
-		b.WriteString(dimStyle.Render("  Waiting for deep links...\n"))
+	if n == 0 {
+		b.WriteString(dimStyle.Render("  waiting for deep links...\n"))
 	} else {
 		start := 0
-		if len(m.links) > 30 {
-			start = len(m.links) - 30
+		if n > 30 {
+			start = n - 30
 		}
 		for _, lk := range m.links[start:] {
-			ts := dimStyle.Render(lk.at.Local().Format("15:04:05"))
-			b.WriteString(fmt.Sprintf("  %s  %s\n", ts, urlStyle.Render(lk.url)))
-			if len(lk.args) > 0 {
-				b.WriteString(fmt.Sprintf("           %s\n", argsStyle.Render("→ "+strings.Join(lk.args, " "))))
+			b.WriteString(fmt.Sprintf("  %s  %s\n",
+				tsStyle.Render(lk.at.Local().Format("15:04:05")),
+				urlStyle.Render(lk.url)))
+			for _, arg := range lk.args {
+				b.WriteString(fmt.Sprintf("             %s\n",
+					argsStyle.Render("▸ "+arg)))
 			}
 		}
 	}
