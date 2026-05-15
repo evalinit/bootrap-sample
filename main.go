@@ -115,14 +115,17 @@ func main() {
 	}
 
 	// Detect whether we have a terminal to render a TUI in.
-	hasTTY := isTerminal(os.Stdout.Fd())
+	hasTTY := isInteractiveTTY(os.Stdout.Fd())
 
 	if hasTTY {
 		p := tea.NewProgram(model{addr: addr}, tea.WithAltScreen())
 		go acceptLoop(ln, logPath, p)
 		if _, err := p.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "tui: %v\n", err)
-			os.Exit(1)
+			// TUI failed to initialise (e.g. not the foreground process group).
+			// The acceptLoop goroutine is still running and will log deeplinks
+			// to file. Block so the process stays alive and the TCP port stays open.
+			fmt.Fprintf(os.Stderr, "tui: %v; continuing headless\n", err)
+			<-make(chan struct{})
 		}
 	} else {
 		// Headless: just accept connections and log to file.
