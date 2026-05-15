@@ -115,8 +115,7 @@ func main() {
 	}
 
 	// Detect whether we have a terminal to render a TUI in.
-	fi, _ := os.Stdout.Stat()
-	hasTTY := fi.Mode()&os.ModeCharDevice != 0
+	hasTTY := isTerminal(os.Stdout.Fd())
 
 	if hasTTY {
 		p := tea.NewProgram(model{addr: addr}, tea.WithAltScreen())
