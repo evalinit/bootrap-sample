@@ -39,8 +39,10 @@ type linkReceived struct {
 // ---- Bubble Tea model ----
 
 type model struct {
-	addr  string
-	links []linkReceived
+	addr   string
+	links  []linkReceived
+	height int
+	width  int
 }
 
 func (m model) Init() tea.Cmd { return nil }
@@ -51,6 +53,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+	case tea.WindowSizeMsg:
+		m.height = msg.Height
+		m.width = msg.Width
 	case linkReceived:
 		m.links = append(m.links, msg)
 	}
@@ -98,18 +103,34 @@ func (m model) View() string {
 	if n == 0 {
 		b.WriteString(dimStyle.Render("  waiting for deep links...\n"))
 	} else {
-		start := 0
-		if n > 30 {
-			start = n - 30
+		// header=3 lines, footer=2 lines; each link is 1 + len(args) lines.
+		// Walk backwards through links, collecting rows until we fill the budget.
+		budget := m.height - 5
+		if budget < 1 {
+			budget = 10 // fallback before first WindowSizeMsg
 		}
-		for _, lk := range m.links[start:] {
-			b.WriteString(fmt.Sprintf("  %s  %s\n",
-				tsStyle.Render(lk.at.Local().Format("15:04:05")),
-				urlStyle.Render(lk.url)))
-			for _, arg := range lk.args {
-				b.WriteString(fmt.Sprintf("             %s\n",
-					argsStyle.Render("▸ "+arg)))
+		type row struct{ s string }
+		var rows []row
+		for i := n - 1; i >= 0 && budget > 0; i-- {
+			lk := m.links[i]
+			needed := 1 + len(lk.args)
+			if needed > budget {
+				break
 			}
+			budget -= needed
+			// prepend so oldest-visible is at top
+			var entry []row
+			entry = append(entry, row{fmt.Sprintf("  %s  %s\n",
+				tsStyle.Render(lk.at.Local().Format("15:04:05")),
+				urlStyle.Render(lk.url))})
+			for _, arg := range lk.args {
+				entry = append(entry, row{fmt.Sprintf("             %s\n",
+					argsStyle.Render("▸ "+arg))})
+			}
+			rows = append(entry, rows...)
+		}
+		for _, r := range rows {
+			b.WriteString(r.s)
 		}
 	}
 
