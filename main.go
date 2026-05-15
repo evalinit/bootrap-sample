@@ -67,7 +67,7 @@ var (
 func (m model) View() string {
 	var b strings.Builder
 
-	b.WriteString(headerStyle.Render(fmt.Sprintf("Your Desktop App  v%s", version)))
+	b.WriteString(headerStyle.Render(fmt.Sprintf("Sample  v%s", version)))
 	b.WriteString(dimStyle.Render(fmt.Sprintf("   %s\n\n", m.addr)))
 
 	if len(m.links) == 0 {
@@ -98,13 +98,13 @@ func main() {
 		addr = os.Args[1]
 	}
 
-	dataDir := resolveDataDir("Your Desktop App")
+	dataDir := resolveDataDir("Sample")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "data dir: %v\n", err)
 		os.Exit(2)
 	}
 	_ = os.WriteFile(filepath.Join(dataDir, "hello.txt"),
-		[]byte(fmt.Sprintf("hello from Your Desktop App v%s @ %s\n", version, time.Now().Format(time.RFC3339))), 0o644)
+		[]byte(fmt.Sprintf("hello from Sample v%s @ %s\n", version, time.Now().Format(time.RFC3339))), 0o644)
 
 	logPath := filepath.Join(dataDir, "messages.log")
 
