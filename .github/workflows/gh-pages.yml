@@ -57,7 +57,7 @@ jobs:
             BIN="$APP_BIN"; [ "$GOOS" = windows ] && BIN="${APP_BIN}.exe"
             OUT="pack/${GOOS}-${GOARCH}/bin"
             mkdir -p "$OUT"
-            GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$OUT/$BIN" ./...
+            GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${{ inputs.version }}" -o "$OUT/$BIN" ./...
           done
 
       - name: Package (dist/<version>_<os-arch>.*)

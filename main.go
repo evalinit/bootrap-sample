@@ -10,7 +10,12 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
+
+var version = "dev"
 
 type DeeplinkMessage struct {
 	Type   string `json:"type"`
@@ -25,42 +30,118 @@ type DeeplinkMessage struct {
 	} `json:"mapped"`
 }
 
+type linkReceived struct {
+	at   time.Time
+	url  string
+	args []string
+}
+
+// ---- Bubble Tea model ----
+
+type model struct {
+	addr  string
+	links []linkReceived
+}
+
+func (m model) Init() tea.Cmd { return nil }
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "q" || msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+	case linkReceived:
+		m.links = append(m.links, msg)
+	}
+	return m, nil
+}
+
+var (
+	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	urlStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	argsStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+)
+
+func (m model) View() string {
+	var b strings.Builder
+
+	b.WriteString(headerStyle.Render(fmt.Sprintf("Your Desktop App  v%s", version)))
+	b.WriteString(dimStyle.Render(fmt.Sprintf("   %s\n\n", m.addr)))
+
+	if len(m.links) == 0 {
+		b.WriteString(dimStyle.Render("  Waiting for deep links...\n"))
+	} else {
+		start := 0
+		if len(m.links) > 30 {
+			start = len(m.links) - 30
+		}
+		for _, lk := range m.links[start:] {
+			ts := dimStyle.Render(lk.at.Local().Format("15:04:05"))
+			b.WriteString(fmt.Sprintf("  %s  %s\n", ts, urlStyle.Render(lk.url)))
+			if len(lk.args) > 0 {
+				b.WriteString(fmt.Sprintf("           %s\n", argsStyle.Render("→ "+strings.Join(lk.args, " "))))
+			}
+		}
+	}
+
+	b.WriteString(dimStyle.Render("\n  q quit"))
+	return b.String()
+}
+
+// ---- main ----
+
 func main() {
-	// TCP address passed as argv[1], default for local testing
 	addr := "127.0.0.1:59595"
 	if len(os.Args) > 1 && strings.TrimSpace(os.Args[1]) != "" {
 		addr = os.Args[1]
 	}
 
-	appName := "Your Desktop App"
-	dataDir := resolveDataDir(appName)
+	dataDir := resolveDataDir("Your Desktop App")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "data dir: %v\n", err)
 		os.Exit(2)
 	}
 	_ = os.WriteFile(filepath.Join(dataDir, "hello.txt"),
-		[]byte("hello from "+appName+" @ "+time.Now().Format(time.RFC3339)+"\n"), 0o644)
+		[]byte(fmt.Sprintf("hello from Your Desktop App v%s @ %s\n", version, time.Now().Format(time.RFC3339))), 0o644)
 
 	logPath := filepath.Join(dataDir, "messages.log")
-	fmt.Printf("%s listening on %s\n", appName, addr)
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "listen: %v\n", err)
 		os.Exit(3)
 	}
-	defer ln.Close()
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			continue
+	// Detect whether we have a terminal to render a TUI in.
+	fi, _ := os.Stdout.Stat()
+	hasTTY := fi.Mode()&os.ModeCharDevice != 0
+
+	if hasTTY {
+		p := tea.NewProgram(model{addr: addr}, tea.WithAltScreen())
+		go acceptLoop(ln, logPath, p)
+		if _, err := p.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "tui: %v\n", err)
+			os.Exit(1)
 		}
-		go handleConn(conn, logPath)
+	} else {
+		// Headless: just accept connections and log to file.
+		acceptLoop(ln, logPath, nil)
 	}
 }
 
-func handleConn(c net.Conn, logPath string) {
+func acceptLoop(ln net.Listener, logPath string, p *tea.Program) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go handleConn(conn, logPath, p)
+	}
+}
+
+func handleConn(c net.Conn, logPath string, p *tea.Program) {
 	defer c.Close()
 	r := bufio.NewReader(c)
 	for {
@@ -68,9 +149,16 @@ func handleConn(c net.Conn, logPath string) {
 		if len(line) > 0 {
 			trim := strings.TrimRight(string(line), "\r\n")
 			var msg DeeplinkMessage
-			_ = json.Unmarshal([]byte(trim), &msg)
-			appendLine(logPath, trim+"\n")
-			fmt.Printf("received deeplink: %s (mode=%s)\n", msg.URL, msg.Mapped.Mode)
+			if jsonErr := json.Unmarshal([]byte(trim), &msg); jsonErr == nil {
+				appendLine(logPath, trim+"\n")
+				if p != nil {
+					lk := linkReceived{at: time.Now(), url: msg.URL}
+					if msg.Mapped.Mode == "args" {
+						lk.args = msg.Mapped.Args
+					}
+					p.Send(lk)
+				}
+			}
 		}
 		if err != nil {
 			return
@@ -95,7 +183,6 @@ func resolveDataDir(appName string) string {
 		return strings.TrimSpace(s)
 	}
 	name := clean(appName)
-
 	switch runtime.GOOS {
 	case "windows":
 		base := os.Getenv("LOCALAPPDATA")
